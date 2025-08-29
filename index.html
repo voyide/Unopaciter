@@ -1,5 +1,3 @@
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -69,7 +67,6 @@
 
   .canvas-wrap{border:var(--border); border-radius:12px; overflow:hidden; background:#0a0f16; display:flex; flex-direction:column}
   .canvas-head{display:flex; align-items:center; justify-content:space-between; padding:8px 10px; font-size:12px; color:#c9d4e6; background:rgba(255,255,255,.03); border-bottom:var(--border)}
-  /* True transparency preview */
   .checkerboard{
     background:
       linear-gradient(45deg, #9aa0ab22 25%, transparent 25%) 0 0/18px 18px,
@@ -101,7 +98,6 @@
     linear-gradient(-45deg, transparent 75%, #9aa0ab22 75%) -8px 0/16px 16px;}
   .swatch{position:absolute; inset:0; border-radius:10px}
 
-  /* Picker */
   .modal{position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:20px;
     background:rgba(5,8,12,.55); backdrop-filter:blur(8px); z-index:20; opacity:0; transition:opacity .12s ease}
   .modal.open{display:flex; opacity:1}
@@ -171,7 +167,7 @@
         <div class="title">Ranges</div>
         <div style="display:flex; gap:8px">
           <button id="addRangeBtn">Add</button>
-          <button id="resetRangesBtn" class="ghost">Redistribute</button>
+          <!-- Redistribute removed -->
         </div>
       </div>
       <div id="ranges" class="ranges"></div>
@@ -241,51 +237,62 @@ const rangesEl=$('#ranges');
 function addRange(defaults={}){
   const id=++rangeIdCounter;
   const row=document.createElement('div'); row.className='range-row'; row.dataset.id=id;
+
   const label=document.createElement('small'); label.textContent=`R${ranges.length+1}`;
+
   const minBox=document.createElement('div'); minBox.className='num';
   const maxBox=document.createElement('div'); maxBox.className='num';
-  minBox.innerHTML=`<label>Min</label><input type="number" min="0" max="255" step="1" value="${defaults.min ?? 0}" id="min-${id}">`;
-  maxBox.innerHTML=`<label>Max</label><input type="number" min="0" max="255" step="1" value="${defaults.max ?? 128}" id="max-${id}">`;
+
+  const minVal = (defaults.hasOwnProperty('min') ? defaults.min : '');
+  const maxVal = (defaults.hasOwnProperty('max') ? defaults.max : '');
+
+  minBox.innerHTML=`<label>Min</label><input type="number" min="0" max="255" step="1" value="${minVal}" placeholder="0–255" id="min-${id}">`;
+  maxBox.innerHTML=`<label>Max</label><input type="number" min="0" max="255" step="1" value="${maxVal}" placeholder="0–255" id="max-${id}">`;
+
   const swatchBtn=document.createElement('button'); swatchBtn.className='swatch-btn'; swatchBtn.id=`swatch-${id}`;
   const checker=document.createElement('div'); checker.className='checker';
   const swatch=document.createElement('div'); swatch.className='swatch'; swatchBtn.appendChild(checker); swatchBtn.appendChild(swatch);
+
   const delBtn=document.createElement('button'); delBtn.className='danger'; delBtn.textContent='×'; delBtn.title='Remove';
 
   row.appendChild(label); row.appendChild(minBox); row.appendChild(maxBox); row.appendChild(swatchBtn); row.appendChild(delBtn);
   rangesEl.appendChild(row);
 
-  const range={id, min:+minBox.querySelector('input').value, max:+maxBox.querySelector('input').value,
-               color: defaults.color ?? {r:255,g:0,b:0,a:255}, row, swatch, label};
+  const range={
+    id,
+    // Store nullable numbers; don't auto-correct or clamp
+    min: (minVal === '' ? null : Number(minVal)),
+    max: (maxVal === '' ? null : Number(maxVal)),
+    color: defaults.color ?? {r:255,g:0,b:0,a:255},
+    row, swatch, label
+  };
   ranges.push(range); setSwatch(range);
 
-  function onChange(){
-    range.min=clamp(parseInt(minBox.querySelector('input').value||'0'),0,255);
-    range.max=clamp(parseInt(maxBox.querySelector('input').value||'0'),0,255);
-    if(range.min>range.max){ range.max=range.min; maxBox.querySelector('input').value=range.max; }
-    minBox.querySelector('input').value=range.min; maxBox.querySelector('input').value=range.max;
+  const minInput=minBox.querySelector('input');
+  const maxInput=maxBox.querySelector('input');
+
+  function onInput(){
+    const parse = v => (v==='' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+    range.min = parse(minInput.value);
+    range.max = parse(maxInput.value);
     schedulePreview();
   }
-  minBox.querySelector('input').addEventListener('input', onChange);
-  maxBox.querySelector('input').addEventListener('input', onChange);
+  minInput.addEventListener('input', onInput);
+  maxInput.addEventListener('input', onInput);
+
   swatchBtn.addEventListener('click', ()=> openPickerFor(range));
+
   delBtn.addEventListener('click', ()=>{
     if(ranges.length<=1) return;
     row.remove(); ranges=ranges.filter(r=>r.id!==id);
     ranges.forEach((r,i)=> r.label.textContent=`R${i+1}`);
     schedulePreview();
   });
+
   ranges.forEach((r,i)=> r.label.textContent=`R${i+1}`);
 }
+
 function setSwatch(r){ const {r:cr,g:cg,b:cb,a}=r.color; r.swatch.style.background=`rgba(${cr},${cg},${cb},${(a/255).toFixed(3)})`; }
-function redistributeRanges(){
-  const n=ranges.length; if(!n) return; const step=Math.floor(256/n);
-  for(let i=0;i<n;i++){
-    const min=i*step, max=(i===n-1?255:((i+1)*step-1));
-    const r=ranges[i]; r.min=min; r.max=max;
-    r.row.querySelector(`#min-${r.id}`).value=min; r.row.querySelector(`#max-${r.id}`).value=max;
-  }
-  schedulePreview();
-}
 
 /* ---------- Loading ---------- */
 function showWorkArea(show){
@@ -316,19 +323,33 @@ async function loadImageFromDataURL(dataUrl){
 /* ---------- Processing ---------- */
 function updatePreview(){
   if(!imageLoaded||!grayData) return;
-  const LUT=new Uint8ClampedArray(256*4);
-  for(const r of ranges){
-    const {min,max,color:{r:cr,g:cg,b:cb,a:ca}}=r;
-    for(let i=clamp(min,0,255); i<=clamp(max,0,255); i++){
-      const k=i*4; LUT[k]=cr; LUT[k+1]=cg; LUT[k+2]=cb; LUT[k+3]=ca;
+
+  // Build LUT with earliest-created range taking priority.
+  const LUT=new Uint8ClampedArray(256*4); // defaults to transparent
+
+  // Apply later ranges first, then earlier ones overwrite -> earliest wins
+  for(let ri=ranges.length-1; ri>=0; ri--){
+    const r=ranges[ri];
+    if(r.min==null || r.max==null) continue;
+    let lo = Math.floor(r.min), hi = Math.floor(r.max);
+    lo = clamp(lo,0,255); hi = clamp(hi,0,255);
+    if(lo>hi) continue;
+    const {r:cr,g:cg,b:cb,a:ca}=r.color;
+    for(let i=lo;i<=hi;i++){
+      const k=i*4;
+      LUT[k]=cr; LUT[k+1]=cg; LUT[k+2]=cb; LUT[k+3]=ca;
     }
   }
+
   const out=pCtx.createImageData(imgW,imgH), odata=out.data;
-  for(let i=0;i<grayData.length;i++){ const k=grayData[i]*4, o=i*4; odata[o]=LUT[k]; odata[o+1]=LUT[k+1]; odata[o+2]=LUT[k+2]; odata[o+3]=LUT[k+3]; }
+  for(let i=0;i<grayData.length;i++){
+    const k=grayData[i]*4, o=i*4;
+    odata[o]=LUT[k]; odata[o+1]=LUT[k+1]; odata[o+2]=LUT[k+2]; odata[o+3]=LUT[k+3];
+  }
   pCtx.putImageData(out,0,0);
 }
 
-/* ---------- Picker (Canvas Hue Ring = exact match) ---------- */
+/* ---------- Picker ---------- */
 const modal=$('#pickerModal');
 const wheelwrap=$('#wheelwrap');
 const hueCanvas=$('#hueCanvas'); const hueCtx=hueCanvas.getContext('2d');
@@ -348,7 +369,6 @@ function drawHueRing(){
   hueCtx.clearRect(0,0,size,size);
   hueCtx.lineWidth=t; hueCtx.lineCap='butt';
   const cx=size/2, cy=size/2, r=size/2 - t/2;
-  // one stroke per degree for super-accurate match
   for(let deg=0; deg<360; deg++){
     const start=(deg-0.5)*Math.PI/180, end=(deg+0.5)*Math.PI/180;
     hueCtx.beginPath();
@@ -365,7 +385,6 @@ function layoutPicker(){
 
   drawHueRing();
 
-  // SV square fits inside inner circle
   const innerR = size/2 - thickness - 6; pickState.innerRadius=innerR;
   const svSide = Math.max(40, Math.floor(innerR*Math.SQRT2*0.96));
   const dpr=window.devicePixelRatio||1;
@@ -416,7 +435,7 @@ function openPickerFor(range){
   alphaRange.value=Math.round(pickState.a*100);
 
   modal.classList.add('open'); modal.setAttribute('aria-hidden','false');
-  requestAnimationFrame(()=> layoutPicker()); // ensure visible before measuring
+  requestAnimationFrame(()=> layoutPicker());
 }
 function closePicker(){ modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); }
 function commitPicker(){
@@ -426,13 +445,11 @@ function commitPicker(){
   setSwatch(pickState.forRange); schedulePreview(); closePicker();
 }
 
-/* Exact hue mapping from pointer angle -> same ring pixels */
 let draggingHue=false, draggingSV=false;
 function hueFromEvent(e){
   const rect=hueCanvas.getBoundingClientRect();
   const cx=rect.left+rect.width/2, cy=rect.top+rect.height/2;
   const dx=e.clientX-cx, dy=e.clientY-cy;
-  // DOM y increases downward; atan2 gives 0 at +x (right) and increases clockwise – matches our ring drawing.
   pickState.h=(Math.atan2(dy, dx)*180/Math.PI + 360)%360;
   updateHueCursor(); renderSV(); updateAlphaVisuals();
 }
@@ -484,15 +501,14 @@ $('#saveBtn').addEventListener('click', ()=>{
   }, 'image/png');
 });
 
-$('#addRangeBtn').addEventListener('click', ()=>{ addRange(); redistributeRanges(); });
-$('#resetRangesBtn').addEventListener('click', redistributeRanges);
+$('#addRangeBtn').addEventListener('click', ()=>{ addRange(); });
 document.addEventListener('keydown', e=>{ if(e.key==='Escape'&&modal.classList.contains('open')) closePicker(); });
 
 /* ---------- Defaults ---------- */
 const palette=[ {r:255,g:59,b:48,a:255},{r:52,g:199,b:89,a:255},{r:0,g:122,b:255,a:255},{r:255,g:149,b:0,a:255} ];
 addRange({min:0,max:127,color:palette[0]});
 addRange({min:128,max:255,color:palette[1]});
-redistributeRanges();
+// No redistribution; new added ranges start empty and don't affect others
 </script>
 </body>
 </html>
